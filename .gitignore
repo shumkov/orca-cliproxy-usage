@@ -1,0 +1,6 @@
+node_modules/
+.orca/
+__pycache__/
+*.pyc
+test-results/
+playwright-report/

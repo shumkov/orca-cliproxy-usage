@@ -1,0 +1,19 @@
+{
+  "name": "cliproxy-orca",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts && python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:ui": "playwright test",
+    "package": "node scripts/package.mjs",
+    "smoke": "node scripts/smoke.ts",
+    "screenshots": "node scripts/demo-screenshots.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  }
+}

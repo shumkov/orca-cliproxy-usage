@@ -1,0 +1,78 @@
+{
+  "manifestVersion": 2,
+  "id": "cliproxy-usage",
+  "name": "CLIProxy Usage",
+  "version": "0.1.0",
+  "description": "Codex and Claude account usage, across local and SSH-connected CLIProxy hosts.",
+  "repository": "https://github.com/shumkov/orca-cliproxy-usage",
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "engines": {
+    "orca": ">=1.4.258"
+  },
+  "main": "src/worker.ts",
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ],
+  "contributes": {
+    "panels": [
+      {
+        "id": "usage",
+        "title": "CLIProxy Usage",
+        "icon": "gauge",
+        "entry": "src/panel.html",
+        "ui": "html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "usage.open",
+        "title": "CLIProxy: Open Usage"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "codex",
+        "text": "Codex \u2014",
+        "command": "usage.open"
+      },
+      {
+        "id": "claude",
+        "text": "Claude \u2014",
+        "command": "usage.open"
+      }
+    ],
+    "settings": [
+      {
+        "key": "profiles",
+        "title": "Connection profiles",
+        "type": "string",
+        "multiline": true,
+        "description": "JSON array. Only the selected host connects. Configs and secrets are read on that host. JSON-formatted proxy configs only.",
+        "default": "[\n  {\n    \"id\": \"local\",\n    \"label\": \"Local\",\n    \"transport\": \"local\",\n    \"configPath\": \"~/.cli-proxy-api/config.yaml\",\n    \"baseUrl\": \"http://127.0.0.1:8318\"\n  }\n]"
+      }
+    ]
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Ivan Shumkov",
+    "url": "https://github.com/shumkov"
+  },
+  "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "CLIProxy Usage: Codex and Claude usage across local and SSH hosts, with an illustrative quota gauge."
+  },
+  "screenshots": [
+    {
+      "path": "assets/gallery.png",
+      "alt": "Compact, Detailed and account detail views with fictional accounts and simulated quota.",
+      "caption": "Synthetic demo data. Compact overview, detailed windows, and an account with usage and credits."
+    }
+  ]
+}
