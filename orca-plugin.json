@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "cliproxy-usage",
   "name": "CLIProxy Usage",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codex and Claude account usage, across local and SSH-connected CLIProxy hosts.",
   "repository": "https://github.com/shumkov/orca-cliproxy-usage",
   "execution": "trusted-worker",

@@ -35,10 +35,10 @@ Status usage belongs to one automatically chosen account, not a provider-wide av
 
 Requires **Orca desktop 1.4.258+ on macOS**, `/usr/bin/python3` 3.9+ on each collection host, and a compatible CLIProxy management API (`/v0/management`). SSH profiles also need noninteractive SSH with a trusted host key. This version reads **JSON-formatted configuration**, even if the filename ends in `.yaml`; general YAML is not supported.
 
-Once the public repository is available, run:
+Install from the public repository:
 
 ```fish
-orca plugin install shumkov/orca-cliproxy-usage@v0.1.0 --json
+orca plugin install shumkov/orca-cliproxy-usage@v0.1.1 --json
 ```
 
 Orca returns an approval request for this exact source and access. Review it, then rerun the command with `--approve` and **the fingerprint Orca returned**. Do not copy another person's fingerprint. You can also install the repository through Orca's plugin UI when its listing is available.

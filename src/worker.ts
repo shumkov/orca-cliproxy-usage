@@ -11,6 +11,7 @@ import { assertJson, toJson } from './json.mjs';
 
 const CLI = '/Applications/Orca.app/Contents/Resources/bin/orca';
 let cleanup: (() => void) | undefined;
+type CliOperation = 'inspect' | 'list' | 'open';
 
 function params(input: unknown): Record<string, JsonValue> {
   assertJson(input);
@@ -76,11 +77,13 @@ export default async function activate(orca: OrcaWorkerApi) {
   orca.commands.register('usage.open', async () => {
     orca.log('CLIProxy Usage open: started');
     let stage = 'identity';
+    let operation: CliOperation = 'inspect';
     try {
       const root = fileURLToPath(new URL('../', import.meta.url));
       const inspect = await cliJson(['plugin', 'inspect', root]);
       if (inspect?.valid !== true || inspect.kind !== 'plugin' || inspect.plugin?.pluginKey !== 'local.cliproxy-usage'
         || typeof inspect.contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(inspect.contentHash)) throw new Error();
+      operation = 'list';
       const list = await cliJson(['plugin', 'list']);
       if (!Array.isArray(list?.plugins)) throw new Error();
       const matches = list.plugins.filter((plugin: any) => typeof plugin?.pluginKey === 'string'
@@ -91,12 +94,13 @@ export default async function activate(orca: OrcaWorkerApi) {
       if (candidates.length !== 1) throw new Error();
       const key = candidates[0].pluginKey;
       stage = 'response';
+      operation = 'open';
       const opened = await cliJson(['plugin', 'open', key, '--panel', 'usage']);
       if (opened?.kind !== 'panel' || opened.pluginKey !== key || opened.panelId !== 'usage') throw new Error();
       orca.log('CLIProxy Usage open: succeeded');
       return 'CLIProxy Usage opened';
     } catch (error) {
-      orca.log(`CLIProxy Usage open: failed stage=${error instanceof CliFailure ? error.stage : stage}`);
+      orca.log(`CLIProxy Usage open: failed stage=${error instanceof CliFailure ? error.stage : stage} operation=${error instanceof CliFailure ? error.operation : operation}`);
       throw new Error('Could not open CLIProxy Usage panel');
     }
   });
@@ -116,25 +120,26 @@ export default async function activate(orca: OrcaWorkerApi) {
 export function deactivate() { cleanup?.(); cleanup = undefined; }
 
 class CliFailure extends Error {
-  constructor(readonly stage: string) { super('Orca CLI request failed'); }
+  constructor(readonly stage: string, readonly operation: CliOperation) { super('Orca CLI request failed'); }
 }
 
-function cliJson(args: string[]): Promise<any> {
+function cliJson(args: ['plugin', CliOperation, ...string[]]): Promise<any> {
   const env = { ...process.env };
   delete env.ORCA_ENVIRONMENT;
   delete env.ORCA_ENVIRONMENT_ID;
+  delete env.ORCA_PAIRING_CODE;
   return new Promise((resolve, reject) => {
-    execFile(CLI, [...args, '--environment', 'local', '--json'], { env, timeout: 10000, maxBuffer: 65536 }, (error, stdout) => {
+    execFile(CLI, [...args, ...(args[1] === 'inspect' ? [] : ['--environment', 'local']), '--json'], { env, timeout: 10000, maxBuffer: 65536 }, (error, stdout) => {
       if (error) {
         const stage = error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'output-limit'
           : error.killed || error.code === 'ETIMEDOUT' ? 'timeout' : typeof error.code === 'number' || error.signal ? 'exit' : 'spawn';
-        reject(new CliFailure(stage)); return;
+        reject(new CliFailure(stage, args[1])); return;
       }
       try {
         const response = JSON.parse(stdout);
         if (response?.ok !== true) throw new Error();
         resolve(response.result);
-      } catch { reject(new CliFailure('response')); }
+      } catch { reject(new CliFailure('response', args[1])); }
     });
   });
 }

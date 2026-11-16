@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, cp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mountWorker, mockHost, type TestWorker } from 'orca/testing';
 import * as workerModule from '../src/worker.ts';
 import type { View } from '../src/types.ts';
@@ -15,18 +15,23 @@ import { strictJson } from './strict-json.ts';
 
 async function withOpenCommand(t: TestContext, outcome: { error?: Error; stdout: string }, action: (worker: TestWorker) => Promise<void>, pluginKey = 'local.cliproxy-usage', candidates?: unknown[], responses: { inspect?: string; list?: string; opens?: number } = {}) {
   let opens = 0;
+  const selectors = ['ORCA_ENVIRONMENT', 'ORCA_ENVIRONMENT_ID', 'ORCA_PAIRING_CODE'] as const;
+  const previous = selectors.map(key => process.env[key]);
+  for (const key of selectors) process.env[key] = 'synthetic-inherited-selector';
   const run = t.mock.method(childProcess, 'execFile', ((...args: any[]) => {
     assert.equal(args[0], '/Applications/Orca.app/Contents/Resources/bin/orca');
     assert.equal(args[2].timeout, 10000);
     assert.equal(args[2].maxBuffer, 65536);
     assert.equal(args[2].env.ORCA_ENVIRONMENT, undefined);
     assert.equal(args[2].env.ORCA_ENVIRONMENT_ID, undefined);
+    assert.equal(args[2].env.ORCA_PAIRING_CODE, undefined);
     const hash = 'a'.repeat(64);
     let stdout: string; let error: Error | null = null;
     if (args[1][1] === 'inspect') {
-      assert.equal(args[1][2], fileURLToPath(new URL('../', import.meta.url)));
+      assert.deepEqual(args[1], ['plugin', 'inspect', fileURLToPath(new URL('../', import.meta.url)), '--json']);
       stdout = responses.inspect ?? JSON.stringify({ ok: true, result: { valid: true, kind: 'plugin', contentHash: hash, plugin: { pluginKey: 'local.cliproxy-usage' } } });
     } else if (args[1][1] === 'list') {
+      assert.deepEqual(args[1], ['plugin', 'list', '--environment', 'local', '--json']);
       stdout = responses.list ?? JSON.stringify({ ok: true, result: { plugins: candidates ?? [{ pluginKey, source: { kind: 'git', contentHash: hash } }] } });
     } else {
       assert.deepEqual(args[1], ['plugin', 'open', pluginKey, '--panel', 'usage', '--environment', 'local', '--json']);
@@ -36,9 +41,14 @@ async function withOpenCommand(t: TestContext, outcome: { error?: Error; stdout:
     return {};
   }) as typeof childProcess.execFile);
   syncBuiltinESMExports();
-  const worker = await mountWorker(workerModule, { host: mockHost({ capabilities: ['storage:own', 'settings:own'], settings: { profiles: '[]' } }) });
-  try { await action(worker); if (responses.opens !== undefined) assert.equal(opens, responses.opens); }
-  finally { await worker.deactivate(); run.mock.restore(); syncBuiltinESMExports(); }
+  let worker: TestWorker | undefined;
+  try {
+    worker = await mountWorker(workerModule, { host: mockHost({ capabilities: ['storage:own', 'settings:own'], settings: { profiles: '[]' } }) });
+    await action(worker); if (responses.opens !== undefined) assert.equal(opens, responses.opens);
+  } finally {
+    await worker?.deactivate(); run.mock.restore(); syncBuiltinESMExports();
+    selectors.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+  }
 }
 
 test('status and palette command rejects a CLI JSON refusal instead of reporting opened', async t => {
@@ -46,7 +56,7 @@ test('status and palette command rejects a CLI JSON refusal instead of reporting
     '{"ok":true,"result":{"kind":"panel","pluginKey":"another-plugin","panelId":"usage"}}']) {
     await withOpenCommand(t, { stdout }, async worker => {
       await assert.rejects(worker.command('usage.open'), /Could not open CLIProxy Usage panel/);
-      assert.ok(worker.logs.includes('CLIProxy Usage open: failed stage=response'));
+      assert.ok(worker.logs.includes('CLIProxy Usage open: failed stage=response operation=open'));
       assert.ok(!worker.logs.join(' ').includes('private'));
     });
   }
@@ -68,7 +78,7 @@ test('status and palette command classifies process failures without leaking std
   ] as const) {
     await withOpenCommand(t, { error: Object.assign(new Error('private failure must not be logged'), fields), stdout: 'private output must not be logged' }, async worker => {
       await assert.rejects(worker.command('usage.open'), /Could not open CLIProxy Usage panel/);
-      assert.ok(worker.logs.includes(`CLIProxy Usage open: failed stage=${stage}`));
+      assert.ok(worker.logs.includes(`CLIProxy Usage open: failed stage=${stage} operation=open`));
       assert.ok(!worker.logs.join(' ').includes('private'));
     });
   }
@@ -214,7 +224,7 @@ test('status open refuses missing or ambiguous content identities without openin
     ['local', 'shumkov'].map(owner => ({ pluginKey: `${owner}.cliproxy-usage`, source: { contentHash: 'a'.repeat(64) } }))]) {
     await withOpenCommand(t, { stdout: '' }, async worker => {
       await assert.rejects(worker.command('usage.open'), /Could not open CLIProxy Usage panel/);
-      assert.ok(worker.logs.includes('CLIProxy Usage open: failed stage=identity'));
+      assert.ok(worker.logs.includes('CLIProxy Usage open: failed stage=identity operation=list'));
     }, 'local.cliproxy-usage', candidates);
   }
 });
@@ -231,6 +241,7 @@ test('malformed or refused identity inspection never reaches panel open', async 
     for (const response of ['{bad JSON', '{"ok":false}', '{"ok":true,"result":null}']) {
       await withOpenCommand(t, { stdout: '' }, async worker => {
         await assert.rejects(worker.command('usage.open'), /Could not open/);
+        assert.ok(worker.logs.some(line => line.endsWith(`operation=${step}`)));
       }, 'local.cliproxy-usage', undefined, { [step]: response, opens: 0 });
     }
   }
@@ -244,4 +255,52 @@ test('identical local and Git content opens the exact local source only after ha
   await withOpenCommand(t, { stdout: '' }, async worker => {
     await assert.rejects(worker.command('usage.open'), /Could not open/);
   }, 'local.cliproxy-usage', [{ pluginKey: 'local.cliproxy-usage', source: { ...source, contentHash: 'b'.repeat(64) } }], { opens: 0 });
+});
+
+
+test('cached Git status command uses real file-local inspect without an environment selector', async t => {
+  const temp = await mkdtemp(join(fileURLToPath(new URL('../', import.meta.url)), '.command-cache-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const root = join(temp, 'plugins', 'shumkov.cliproxy-usage', 'a'.repeat(64));
+  await mkdir(root, { recursive: true });
+  for (const path of ['orca-plugin.json', 'src', 'README.md', 'LICENSE', 'docs', 'assets']) {
+    await cp(new URL(`../${path}`, import.meta.url), join(root, path), { recursive: true });
+  }
+  const nativeExec = childProcess.execFile;
+  const operations: string[] = []; let inspectedHash: string | undefined;
+  const selectors = ['ORCA_ENVIRONMENT', 'ORCA_ENVIRONMENT_ID', 'ORCA_PAIRING_CODE'] as const;
+  const previous = selectors.map(key => process.env[key]);
+  for (const key of selectors) process.env[key] = 'synthetic-inherited-selector';
+  const run = t.mock.method(childProcess, 'execFile', ((program: string, args: string[], options: any, callback: any) => {
+    operations.push(args[1]!);
+    if (args[1] === 'inspect') {
+      assert.equal(args[2], root + '/');
+      return nativeExec(program, args, options, (error, stdout) => {
+        if (!error) {
+          for (const key of selectors) assert.equal(options.env[key], undefined);
+          inspectedHash = JSON.parse(stdout.toString()).result.contentHash;
+        }
+        callback(error, stdout, '');
+      });
+    }
+    assert.match(inspectedHash!, /^[a-f0-9]{64}$/);
+    if (args[1] === 'list') callback(null, JSON.stringify({ ok: true, result: { plugins: [{ pluginKey: 'shumkov.cliproxy-usage', source: { kind: 'git', contentHash: inspectedHash } }] } }), '');
+    else {
+      assert.deepEqual(args, ['plugin', 'open', 'shumkov.cliproxy-usage', '--panel', 'usage', '--environment', 'local', '--json']);
+      callback(null, JSON.stringify({ ok: true, result: { kind: 'panel', pluginKey: 'shumkov.cliproxy-usage', panelId: 'usage' } }), '');
+    }
+    return {};
+  }) as typeof childProcess.execFile);
+  syncBuiltinESMExports();
+  let worker: TestWorker | undefined;
+  try {
+    const module = await import(pathToFileURL(join(root, 'src/worker.ts')).href);
+    worker = await mountWorker(module, { host: mockHost({ capabilities: ['storage:own', 'settings:own'], settings: { profiles: '[]' } }) });
+    assert.equal(await worker.command('usage.open'), 'CLIProxy Usage opened');
+    assert.deepEqual(operations, ['inspect', 'list', 'open']);
+  } finally {
+    await worker?.deactivate(); run.mock.restore(); syncBuiltinESMExports();
+    selectors.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    await rm(temp, { recursive: true, force: true });
+  }
 });
